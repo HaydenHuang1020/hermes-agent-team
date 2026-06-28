@@ -1,0 +1,30 @@
+node_modules/
+dist/
+output/
+release/
+ios/DerivedData/
+ios/build/
+.DS_Store
+*.log
+
+# Local environment and editor state
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+
+# Test and package manager cache
+coverage/
+.nyc_output/
+.npm/
+
+# Xcode local state
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+
+# Signing and provisioning artifacts
+*.p12
+*.mobileprovision
+*.provisionprofile

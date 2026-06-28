@@ -1,0 +1,30 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("hermesTeam", {
+  bootstrap: (payload) => ipcRenderer.invoke("team:bootstrap", payload),
+  refreshDataHealth: (payload) => ipcRenderer.invoke("team:refresh-data-health", payload),
+  repairDataHealth: (payload) => ipcRenderer.invoke("team:repair-data-health", payload),
+  openDataGovernancePath: (payload) => ipcRenderer.invoke("team:open-data-governance-path", payload),
+  createWorkspace: (payload) => ipcRenderer.invoke("team:create-workspace", payload),
+  deleteWorkspace: (payload) => ipcRenderer.invoke("team:delete-workspace", payload),
+  createChannel: (payload) => ipcRenderer.invoke("team:create-channel", payload),
+  deleteChannel: (payload) => ipcRenderer.invoke("team:delete-channel", payload),
+  createAgent: (payload) => ipcRenderer.invoke("team:create-agent", payload),
+  deleteAgent: (payload) => ipcRenderer.invoke("team:delete-agent", payload),
+  setAgentChannel: (payload) => ipcRenderer.invoke("team:set-agent-channel", payload),
+  updateAgentConfig: (payload) => ipcRenderer.invoke("team:update-agent-config", payload),
+  startTaskRun: (payload) => ipcRenderer.invoke("team:start-task-run", payload),
+  sendChannelMessage: (payload) => ipcRenderer.invoke("team:send-channel-message", payload),
+  runSlashCommand: (payload) => ipcRenderer.invoke("team:run-slash-command", payload),
+  confirmTaskCleanup: (payload) => ipcRenderer.invoke("team:confirm-task-cleanup", payload),
+  runSandboxQuickAction: (payload) => ipcRenderer.invoke("team:run-sandbox-quick-action", payload),
+  startDiscussion: (payload) => ipcRenderer.invoke("team:start-discussion", payload),
+  respondDiscussion: (payload) => ipcRenderer.invoke("team:respond-discussion", payload),
+  continueDiscussion: (payload) => ipcRenderer.invoke("team:continue-discussion", payload),
+  approveDiscussionRounds: (payload) => ipcRenderer.invoke("team:approve-discussion-rounds", payload),
+  closeDiscussion: (payload) => ipcRenderer.invoke("team:close-discussion", payload),
+  testRuntimeLockLifecycle: (payload) => ipcRenderer.invoke("team:test-runtime-lock-lifecycle", payload),
+  testTaskDiscussionBridgeReliability: (payload) => ipcRenderer.invoke("team:test-task-discussion-bridge-reliability", payload),
+  testReliabilityClosure: (payload) => ipcRenderer.invoke("team:test-reliability-closure", payload),
+  testDataGovernance: (payload) => ipcRenderer.invoke("team:test-data-governance", payload)
+});
