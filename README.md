@@ -1,5 +1,7 @@
 # Hermes Agent Team
 
+English | [中文](README.zh-CN.md)
+
 Local-first desktop and iOS control surface for coordinating a team of Hermes agents.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
