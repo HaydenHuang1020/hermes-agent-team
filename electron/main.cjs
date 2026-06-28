@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const http = require("node:http");
 const { execFile, execFileSync, spawn } = require("node:child_process");
 const initSqlJs = require("sql.js");
+const { makeId, compactText, safeJson, parseJsonObject } = require("./runtime-utils.cjs");
 
 let mainWindow;
 let SQL;
@@ -408,10 +409,6 @@ function discussionConvergenceGuardBlock(maxRoundsUsed = 0) {
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function makeId(prefix) {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function normalizeAgentBackend(value) {
@@ -1099,27 +1096,6 @@ function audit({ workspaceId, channelId = null, actorType, actorId = null, actio
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [makeId("audit"), workspaceId, channelId, actorType, actorId, action, result, detail, nowIso()]
   );
-}
-
-function compactText(value, max = 1200) {
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
-}
-
-function safeJson(value) {
-  try {
-    return JSON.stringify(value || {});
-  } catch {
-    return "{}";
-  }
-}
-
-function parseJsonObject(value, fallback = {}) {
-  try {
-    const parsed = JSON.parse(String(value || ""));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
 }
 
 function countQuery(sql, params = []) {
@@ -1912,7 +1888,8 @@ function blackboardSchemaContract() {
       "locks identify resources or files that should not be concurrently changed",
       "outputs store verified deliverables and their evidence pointers"
     ],
-    conflict_policy: "new writes append with source metadata; conflicting decisions require a Decision Record instead of overwriting silently",
+    conflict_policy:
+      "new writes append with source metadata; writes sharing a conflict key/resource/evidence pointer are compared for status and polarity conflicts; detected conflicts are written to risks instead of being hidden",
     retention_policy: "keep the most recent 20 items per field in the prompt-facing structured state"
   };
 }
@@ -1981,6 +1958,100 @@ function replaceStructuredBlackboardField({ workspaceId, channelId = null, field
     value: state,
     updatedByType: source === "human" ? "human" : source === "agent" ? "agent" : "system"
   });
+}
+
+function normalizedBlackboardText(value) {
+  return compactText(value, 700)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s:_/-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function blackboardPolarity(value, metadata = {}) {
+  const status = String(metadata.status || metadata.result || "").toLowerCase();
+  const text = `${status} ${normalizedBlackboardText(value)}`;
+  if (/(failed|blocked|critical|error|missing|timeout|needs_review|stale|失败|阻断|风险|缺少|错误|异常|冲突|超时)/i.test(text)) {
+    return "negative";
+  }
+  if (/(passed|allowed|resolved|ready|ok|success|completed|cleaned|正常|通过|成功|完成|可用|已清理)/i.test(text)) {
+    return "positive";
+  }
+  return "";
+}
+
+function blackboardConflictSignature(field, metadata = {}) {
+  const keys = [
+    "conflictKey",
+    "taskRunId",
+    "discussionId",
+    "decisionRecordId",
+    "lockId",
+    "resource",
+    "evidence",
+    "outputId",
+    "assetId",
+    "key"
+  ];
+  const parts = [];
+  for (const key of keys) {
+    const value = metadata[key] ?? metadata[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)];
+    if (value !== undefined && value !== null && String(value).trim()) parts.push(`${key}=${String(value).trim()}`);
+  }
+  if (!parts.length) return "";
+  return `${field}:${parts.join("|")}`;
+}
+
+function detectStructuredBlackboardConflict(state, field, entry) {
+  if (!state || field === "risks") return null;
+  const signature = blackboardConflictSignature(field, entry.metadata || {});
+  if (!signature) return null;
+  const incomingText = normalizedBlackboardText(entry.text);
+  const incomingPolarity = blackboardPolarity(entry.text, entry.metadata);
+  const incomingStatus = String(entry.metadata?.status || entry.metadata?.result || "").trim();
+  const existingItems = Array.isArray(state[field]) ? state[field] : [];
+
+  for (const existing of existingItems) {
+    if (blackboardConflictSignature(field, existing.metadata || {}) !== signature) continue;
+    const existingText = normalizedBlackboardText(existing.text);
+    if (!existingText || existingText === incomingText) continue;
+    const existingPolarity = blackboardPolarity(existing.text, existing.metadata);
+    const existingStatus = String(existing.metadata?.status || existing.metadata?.result || "").trim();
+    const statusConflict = Boolean(existingStatus && incomingStatus && existingStatus !== incomingStatus);
+    const polarityConflict = Boolean(
+      existingPolarity &&
+        incomingPolarity &&
+        existingPolarity !== incomingPolarity
+    );
+    if (!statusConflict && !polarityConflict) continue;
+    const conflictId = crypto
+      .createHash("sha256")
+      .update(JSON.stringify({ signature, existingText, incomingText }))
+      .digest("hex")
+      .slice(0, 16);
+    const alreadyRecorded = (Array.isArray(state.risks) ? state.risks : []).some(
+      (risk) => risk?.metadata?.conflictId === conflictId
+    );
+    if (alreadyRecorded) return null;
+    return {
+      text: `Blackboard conflict detected for ${signature}: "${compactText(existing.text, 160)}" vs "${compactText(entry.text, 160)}"`,
+      source: "system",
+      metadata: {
+        conflict: true,
+        conflictId,
+        signature,
+        field,
+        existingStatus,
+        incomingStatus,
+        existingPolarity,
+        incomingPolarity,
+        existingText: compactText(existing.text, 400),
+        incomingText: compactText(entry.text, 400)
+      },
+      at: nowIso()
+    };
+  }
+  return null;
 }
 
 function syncRuntimeLocksToBlackboard(workspaceId, channelId = null) {
@@ -2812,15 +2883,17 @@ function appendStructuredBlackboard({ workspaceId, channelId = null, field, text
   if (!workspaceId || !BLACKBOARD_SCHEMA_FIELDS.includes(field)) return;
   ensureBlackboardSchema(workspaceId, channelId);
   const state = readStructuredBlackboard(workspaceId);
-  state[field] = [
-    ...(Array.isArray(state[field]) ? state[field] : []),
-    {
-      text: compactText(text, 500),
-      source,
-      metadata,
-      at: nowIso()
-    }
-  ].slice(-20);
+  const entry = {
+    text: compactText(text, 500),
+    source,
+    metadata,
+    at: nowIso()
+  };
+  const conflictRisk = detectStructuredBlackboardConflict(state, field, entry);
+  state[field] = [...(Array.isArray(state[field]) ? state[field] : []), entry].slice(-20);
+  if (conflictRisk) {
+    state.risks = [...(Array.isArray(state.risks) ? state.risks : []), conflictRisk].slice(-20);
+  }
   upsertBlackboardEntry({
     workspaceId,
     channelId,
@@ -3235,6 +3308,12 @@ function sandboxQuickActions({ sandboxPath, protocolPath, worktreePath, workspac
       destructive: false
     },
     {
+      id: "create_worktree",
+      label: "创建 worktree",
+      command: `git -C "${workspacePath}" worktree add --detach "${worktreePath}" HEAD`,
+      destructive: false
+    },
+    {
       id: "remove_worktree",
       label: "移除 worktree",
       command: `git -C "${workspacePath}" worktree remove --force "${worktreePath}"`,
@@ -3396,6 +3475,17 @@ function runSandboxQuickAction({ taskRunId, action }) {
       content: detail,
       status: "visible"
     });
+  } else if (quickAction.id === "create_worktree") {
+    fs.mkdirSync(sandboxPath, { recursive: true });
+    if (fs.existsSync(worktreePath)) {
+      detail = `任务沙箱 worktree 已存在：${worktreePath}`;
+    } else {
+      const output = safeExecGit(["-C", workspacePath, "worktree", "add", "--detach", worktreePath, "HEAD"]);
+      if (!fs.existsSync(worktreePath)) {
+        throw new Error(`worktree 创建失败：${worktreePath}`);
+      }
+      detail = `已创建任务沙箱 worktree：${worktreePath}${output ? `\n${compactText(output, 1200)}` : ""}`;
+    }
   } else if (quickAction.id === "remove_worktree") {
     safeExecGit(["-C", workspacePath, "worktree", "remove", "--force", worktreePath]);
     safeRemovePath(worktreePath);
@@ -3434,7 +3524,8 @@ function runSandboxQuickAction({ taskRunId, action }) {
       protocolPath,
       worktreePath,
       workspacePath,
-      status: quickAction.id === "cleanup_sandbox" ? "cleaned" : quickAction.id
+      status: quickAction.id === "cleanup_sandbox" ? "cleaned" : quickAction.id,
+      worktreeExists: fs.existsSync(worktreePath)
     },
     updatedByType: "human"
   });

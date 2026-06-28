@@ -4,7 +4,15 @@
   "private": true,
   "license": "MIT",
   "author": "Hayden",
-  "description": "Local desktop workspace for managing a Hermes Agent team.",
+  "description": "Local-first desktop and iOS control surface for coordinating Hermes agent teams.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HaydenHuang1020/hermes-agent-team.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HaydenHuang1020/hermes-agent-team/issues"
+  },
+  "homepage": "https://github.com/HaydenHuang1020/hermes-agent-team#readme",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
